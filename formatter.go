@@ -14,6 +14,10 @@ const (
 	limit = 50
 )
 
+type Stringer interface {
+	String() string
+}
+
 type formatter struct {
 	x     interface{}
 	force bool
@@ -101,173 +105,178 @@ func (p *printer) printValue(v reflect.Value, showType, quote bool) {
 		return
 	}
 
-	switch v.Kind() {
-	case reflect.Bool:
-		p.printInline(v, v.Bool(), showType)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		p.printInline(v, v.Int(), showType)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		p.printInline(v, v.Uint(), showType)
-	case reflect.Float32, reflect.Float64:
-		p.printInline(v, v.Float(), showType)
-	case reflect.Complex64, reflect.Complex128:
-		fmt.Fprintf(p, "%#v", v.Complex())
-	case reflect.String:
-		p.fmtString(v.String(), quote)
-	case reflect.Map:
-		t := v.Type()
-		if showType {
-			io.WriteString(p, t.String())
-		}
-		writeByte(p, '{')
-		if nonzero(v) {
-			expand := !canInline(v.Type())
-			pp := p
-			if expand {
-				writeByte(p, '\n')
-				pp = p.indent()
-			}
-			keys := v.MapKeys()
-			for i := 0; i < v.Len(); i++ {
-				showTypeInStruct := true
-				k := keys[i]
-				mv := v.MapIndex(k)
-				pp.printValue(k, false, true)
-				writeByte(pp, ':')
-				if expand {
-					writeByte(pp, '\t')
-				}
-				showTypeInStruct = t.Elem().Kind() == reflect.Interface
-				pp.printValue(mv, showTypeInStruct, true)
-				if expand {
-					io.WriteString(pp, ",\n")
-				} else if i < v.Len()-1 {
-					io.WriteString(pp, ", ")
-				}
-			}
-			if expand {
-				pp.tw.Flush()
-			}
-		}
-		writeByte(p, '}')
-	case reflect.Struct:
-		t := v.Type()
-		if v.CanAddr() {
-			addr := v.UnsafeAddr()
-			vis := visit{addr, t}
-			if vd, ok := p.visited[vis]; ok && vd < p.depth {
-				p.fmtString(t.String()+"{(CYCLIC REFERENCE)}", false)
-				break // don't print v again
-			}
-			p.visited[vis] = p.depth
-		}
+	if stringer, ok := v.Interface().(Stringer); ok {
+		p.printInline(v, stringer.String(), showType)
+	} else {
 
-		if showType {
-			io.WriteString(p, t.String())
-		}
-		writeByte(p, '{')
-		if nonzero(v) {
-			expand := !canInline(v.Type())
-			pp := p
-			if expand {
-				writeByte(p, '\n')
-				pp = p.indent()
+		switch v.Kind() {
+		case reflect.Bool:
+			p.printInline(v, v.Bool(), showType)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			p.printInline(v, v.Int(), showType)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+			p.printInline(v, v.Uint(), showType)
+		case reflect.Float32, reflect.Float64:
+			p.printInline(v, v.Float(), showType)
+		case reflect.Complex64, reflect.Complex128:
+			fmt.Fprintf(p, "%#v", v.Complex())
+		case reflect.String:
+			p.fmtString(v.String(), quote)
+		case reflect.Map:
+			t := v.Type()
+			if showType {
+				io.WriteString(p, t.String())
 			}
-			for i := 0; i < v.NumField(); i++ {
-				showTypeInStruct := true
-				if f := t.Field(i); f.Name != "" {
-					io.WriteString(pp, f.Name)
+			writeByte(p, '{')
+			if nonzero(v) {
+				expand := !canInline(v.Type())
+				pp := p
+				if expand {
+					writeByte(p, '\n')
+					pp = p.indent()
+				}
+				keys := v.MapKeys()
+				for i := 0; i < v.Len(); i++ {
+					showTypeInStruct := true
+					k := keys[i]
+					mv := v.MapIndex(k)
+					pp.printValue(k, false, true)
 					writeByte(pp, ':')
 					if expand {
 						writeByte(pp, '\t')
 					}
-					showTypeInStruct = labelType(f.Type)
+					showTypeInStruct = t.Elem().Kind() == reflect.Interface
+					pp.printValue(mv, showTypeInStruct, true)
+					if expand {
+						io.WriteString(pp, ",\n")
+					} else if i < v.Len() - 1 {
+						io.WriteString(pp, ", ")
+					}
 				}
-				pp.printValue(getField(v, i), showTypeInStruct, true)
+				if expand {
+					pp.tw.Flush()
+				}
+			}
+			writeByte(p, '}')
+		case reflect.Struct:
+			t := v.Type()
+			if v.CanAddr() {
+				addr := v.UnsafeAddr()
+				vis := visit{addr, t}
+				if vd, ok := p.visited[vis]; ok && vd < p.depth {
+					p.fmtString(t.String() + "{(CYCLIC REFERENCE)}", false)
+					break // don't print v again
+				}
+				p.visited[vis] = p.depth
+			}
+
+			if showType {
+				io.WriteString(p, t.String())
+			}
+			writeByte(p, '{')
+			if nonzero(v) {
+				expand := !canInline(v.Type())
+				pp := p
+				if expand {
+					writeByte(p, '\n')
+					pp = p.indent()
+				}
+				for i := 0; i < v.NumField(); i++ {
+					showTypeInStruct := true
+					if f := t.Field(i); f.Name != "" {
+						io.WriteString(pp, f.Name)
+						writeByte(pp, ':')
+						if expand {
+							writeByte(pp, '\t')
+						}
+						showTypeInStruct = labelType(f.Type)
+					}
+					pp.printValue(getField(v, i), showTypeInStruct, true)
+					if expand {
+						io.WriteString(pp, ",\n")
+					} else if i < v.NumField() - 1 {
+						io.WriteString(pp, ", ")
+					}
+				}
+				if expand {
+					pp.tw.Flush()
+				}
+			}
+			writeByte(p, '}')
+		case reflect.Interface:
+			switch e := v.Elem(); {
+			case e.Kind() == reflect.Invalid:
+				io.WriteString(p, "nil")
+			case e.IsValid():
+				pp := *p
+				pp.depth++
+				pp.printValue(e, showType, true)
+			default:
+				io.WriteString(p, v.Type().String())
+				io.WriteString(p, "(nil)")
+			}
+		case reflect.Array, reflect.Slice:
+			t := v.Type()
+			if showType {
+				io.WriteString(p, t.String())
+			}
+			if v.Kind() == reflect.Slice && v.IsNil() && showType {
+				io.WriteString(p, "(nil)")
+				break
+			}
+			if v.Kind() == reflect.Slice && v.IsNil() {
+				io.WriteString(p, "nil")
+				break
+			}
+			writeByte(p, '{')
+			expand := !canInline(v.Type())
+			pp := p
+			if expand {
+				writeByte(p, '\n')
+				pp = p.indent()
+			}
+			for i := 0; i < v.Len(); i++ {
+				showTypeInSlice := t.Elem().Kind() == reflect.Interface
+				pp.printValue(v.Index(i), showTypeInSlice, true)
 				if expand {
 					io.WriteString(pp, ",\n")
-				} else if i < v.NumField()-1 {
+				} else if i < v.Len() - 1 {
 					io.WriteString(pp, ", ")
 				}
 			}
 			if expand {
 				pp.tw.Flush()
 			}
-		}
-		writeByte(p, '}')
-	case reflect.Interface:
-		switch e := v.Elem(); {
-		case e.Kind() == reflect.Invalid:
-			io.WriteString(p, "nil")
-		case e.IsValid():
-			pp := *p
-			pp.depth++
-			pp.printValue(e, showType, true)
-		default:
-			io.WriteString(p, v.Type().String())
-			io.WriteString(p, "(nil)")
-		}
-	case reflect.Array, reflect.Slice:
-		t := v.Type()
-		if showType {
-			io.WriteString(p, t.String())
-		}
-		if v.Kind() == reflect.Slice && v.IsNil() && showType {
-			io.WriteString(p, "(nil)")
-			break
-		}
-		if v.Kind() == reflect.Slice && v.IsNil() {
-			io.WriteString(p, "nil")
-			break
-		}
-		writeByte(p, '{')
-		expand := !canInline(v.Type())
-		pp := p
-		if expand {
-			writeByte(p, '\n')
-			pp = p.indent()
-		}
-		for i := 0; i < v.Len(); i++ {
-			showTypeInSlice := t.Elem().Kind() == reflect.Interface
-			pp.printValue(v.Index(i), showTypeInSlice, true)
-			if expand {
-				io.WriteString(pp, ",\n")
-			} else if i < v.Len()-1 {
-				io.WriteString(pp, ", ")
+			writeByte(p, '}')
+		case reflect.Ptr:
+			e := v.Elem()
+			if !e.IsValid() {
+				writeByte(p, '(')
+				io.WriteString(p, v.Type().String())
+				io.WriteString(p, ")(nil)")
+			} else {
+				pp := *p
+				pp.depth++
+				writeByte(pp, '&')
+				pp.printValue(e, true, true)
 			}
-		}
-		if expand {
-			pp.tw.Flush()
-		}
-		writeByte(p, '}')
-	case reflect.Ptr:
-		e := v.Elem()
-		if !e.IsValid() {
-			writeByte(p, '(')
+		case reflect.Chan:
+			x := v.Pointer()
+			if showType {
+				writeByte(p, '(')
+				io.WriteString(p, v.Type().String())
+				fmt.Fprintf(p, ")(%#v)", x)
+			} else {
+				fmt.Fprintf(p, "%#v", x)
+			}
+		case reflect.Func:
 			io.WriteString(p, v.Type().String())
-			io.WriteString(p, ")(nil)")
-		} else {
-			pp := *p
-			pp.depth++
-			writeByte(pp, '&')
-			pp.printValue(e, true, true)
+			io.WriteString(p, " {...}")
+		case reflect.UnsafePointer:
+			p.printInline(v, v.Pointer(), showType)
+		case reflect.Invalid:
+			io.WriteString(p, "nil")
 		}
-	case reflect.Chan:
-		x := v.Pointer()
-		if showType {
-			writeByte(p, '(')
-			io.WriteString(p, v.Type().String())
-			fmt.Fprintf(p, ")(%#v)", x)
-		} else {
-			fmt.Fprintf(p, "%#v", x)
-		}
-	case reflect.Func:
-		io.WriteString(p, v.Type().String())
-		io.WriteString(p, " {...}")
-	case reflect.UnsafePointer:
-		p.printInline(v, v.Pointer(), showType)
-	case reflect.Invalid:
-		io.WriteString(p, "nil")
 	}
 }
 
